@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Data Exporter</title>
+        <style>
+                /* ==========================================
+                   Dieter Rams Inspired Minimalist Style
+                   ========================================== */
+                :root {
+                        --color-bg: #f4f4f4;
+                        --color-fg: #111111;
+                        --color-sub: #666666;
+                        --color-border: #cccccc;
+                        --color-panel: #ffffff;
+                }
+
+                body {
+                        background-color: var(--color-bg);
+                        color: var(--color-fg);
+                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+                        margin: 0;
+                        padding: 60px 20px;
+                        line-height: 1.6;
+                }
+
+                .container {
+                        max-width: 640px;
+                        margin: 0 auto;
+                }
+
+                h1 {
+                        font-size: 24px;
+                        font-weight: 500;
+                        letter-spacing: -0.5px;
+                        margin: 0 0 8px 0;
+                }
+
+                .description {
+                        font-size: 13px;
+                        color: var(--color-sub);
+                        margin-bottom: 40px;
+                }
+
+                .section {
+                        margin-bottom: 32px;
+                }
+
+                /* 視覚的アフォーダンスを意識したインダストリアルな入力要素 */
+                textarea {
+                        width: 100%;
+                        height: 140px;
+                        background-color: var(--color-panel);
+                        border: 1px solid var(--color-border);
+                        border-radius: 0;
+                        padding: 12px;
+                        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+                        font-size: 12px;
+                        box-sizing: border-box;
+                        resize: vertical;
+                        margin-bottom: 12px;
+                        transition: border-color 0.2s;
+                }
+
+                textarea:focus {
+                        outline: none;
+                        border-color: var(--color-fg);
+                }
+
+                /* 直線的で機能的なボタンコントロール */
+                .btn {
+                        background-color: var(--color-panel);
+                        color: var(--color-fg);
+                        border: 1px solid var(--color-fg);
+                        padding: 10px 24px;
+                        font-size: 13px;
+                        font-weight: 500;
+                        border-radius: 0;
+                        cursor: pointer;
+                        transition: background-color 0.2s, color 0.2s;
+                }
+
+                .btn:hover {
+                        background-color: var(--color-fg);
+                        color: var(--color-panel);
+                }
+
+                .btn-secondary {
+                        border-color: var(--color-border);
+                        color: var(--color-sub);
+                }
+
+                .btn-secondary:hover {
+                        background-color: #eaeaea;
+                        color: var(--color-fg);
+                }
+
+                .file-info {
+                        font-size: 13px;
+                        color: var(--color-sub);
+                        margin-left: 12px;
+                        vertical-align: middle;
+                }
+
+                /* セッション出力用リスト */
+                .session-list {
+                        margin-top: 48px;
+                        border-top: 1px solid var(--color-border);
+                }
+
+                .session-item {
+                        background-color: var(--color-panel);
+                        border: 1px solid var(--color-border);
+                        padding: 24px;
+                        margin-top: 16px;
+                        display: block;
+                }
+
+                .session-title {
+                        font-size: 15px;
+                        font-weight: 600;
+                        margin-bottom: 8px;
+                }
+
+                .session-meta {
+                        font-size: 12px;
+                        color: var(--color-sub);
+                        margin-bottom: 16px;
+                        white-space: pre-line;
+                }
+        </style>
+</head>
+<body>
+
+<div class="container">
+        <h1>Data Exporter</h1>
+        <div class="description">LocalStorageのダンプデータからセッション毎のCSVファイルを生成します。</div>
+
+        <div class="section">
+                <input type="file" id="fileInput" accept=".json,text/plain" style="display: none;">
+                <button class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">ファイルを選択</button>
+                <span id="fileName" class="file-info">または、下のエリアにテキストを直接貼り付けてください</span>
+        </div>
+
+        <div class="section">
+                <textarea id="jsonTextArea" placeholder='{"shikake_logs": "...", "shikake_history": "..."}'></textarea>
+                <button class="btn" id="parseBtn">ダンプデータを解析</button>
+        </div>
+
+        <div id="sessionList" class="session-list"></div>
+</div>
+
+<script>
+        // アプリケーション定数の定義
+        const AppVersion = '1.0.0';
+
+        /**
+         * ファイル名に使用できない文字をアンダースコアに置換するサニタイズ関数
+         * @param {string} str - 対象の文字列
+         * @returns {string} サニタイズ後の文字列
+         */
+        const sanitizeFileName = (str) => {
+                return str.replace(/[\/\\?%*:|"<>\s]/g, '_');
+        };
+
+        /**
+         * 指定されたログエントリとセッション情報からCSVを生成してダウンロードする
+         * @param {Array} targetLogs - ログエントリの配列
+         * @param {Object} targetInfo - セッションのメタ情報
+         * @param {string} prefix - ファイル名の接頭辞
+         */
+        const downloadCSVInternal = (targetLogs, targetInfo, prefix) => {
+                const headers = [
+                        'ID', 'Timestamp_ISO', 'Timestamp_JST', 'UnixTime', 
+                        'Gender', 'Action_Raw', 'isGroup', 
+                        'isMale', 'isFemale', 'isGroup_Dummy', 
+                        'Passing(0)', 'Look(1)', 'Stop(2)', 'Use(3)',
+                        'Note'
+                ];
+
+                const rows = targetLogs.map(log => {
+                        const jstDate = new Date(log.unixTime).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+                        return [
+                                log.id,
+                                log.timestamp,
+                                jstDate, 
+                                log.unixTime,
+                                log.gender,
+                                log.action,
+                                log.isGroup ? 'Group' : 'Individual',
+                                log.gender === 'Male' ? '1' : '0',
+                                log.gender === 'Female' ? '1' : '0',
+                                log.isGroup ? '1' : '0',
+                                log.isPass ? '1' : '0',
+                                log.isLook ? '1' : '0',
+                                log.isStop ? '1' : '0',
+                                log.isUse ? '1' : '0',
+                                `"${(log.note || '').replace(/"/g, '""')}"`
+                        ];
+                });
+
+                const startTimeStr = targetInfo.startTime ? new Date(targetInfo.startTime).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '';
+                const endTimeStr = targetInfo.endTime ? new Date(targetInfo.endTime).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '';
+                const sanitizedNote = (targetInfo.note || '').replace(/[\n\r,]/g, ' ');
+
+                // メタデータヘッダーを含んだCSVコンテンツの構築
+                const csvContent = [
+                        `# Shikakeology Data Export (${AppVersion})`,
+                        `# Export Date,${new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })}`,
+                        `# Session Start,${startTimeStr}`,
+                        `# Session End,${endTimeStr}`,
+                        `# Location,${targetInfo.location}`,
+                        `# Note,${sanitizedNote}`,
+                        `# Total Records,${targetLogs.length}`,
+                        headers.join(','), 
+                        ...rows.map(r => r.join(','))
+                ].join('\n');
+
+                // UTF-8のBOM(Byte Order Mark)を付与することでExcel等での文字化けを防止
+                const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `${prefix}_${sanitizeFileName(startTimeStr)}.csv`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+        };
+
+        /**
+         * パースされた履歴データ（セッション配列）からUI要素を動的に生成する
+         * @param {Array} history - セッション履歴の配列
+         */
+        const renderSessions = (history) => {
+                const container = document.getElementById('sessionList');
+                container.innerHTML = '';
+
+                if (!history || history.length === 0) {
+                        container.innerHTML = '<div style="font-size: 13px; color: var(--color-sub); padding: 20px 0;">セッション履歴が空です。</div>';
+                        return;
+                }
+
+                history.forEach((session, index) => {
+                        const info = session.sessionInfo || {};
+                        const logs = session.logs || [];
+                        const startTimeStr = info.startTime ? new Date(info.startTime).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '未設定';
+                        
+                        const itemDiv = document.createElement('div');
+                        itemDiv.className = 'session-item';
+
+                        const titleDiv = document.createElement('div');
+                        titleDiv.className = 'session-title';
+                        titleDiv.textContent = `Session #${index + 1} (${info.location || '位置情報なし'})`;
+
+                        const metaDiv = document.createElement('div');
+                        metaDiv.className = 'session-meta';
+                        metaDiv.textContent = `開始時刻: ${startTimeStr}\n記録件数: ${logs.length} 件\nメモ: ${info.note || 'なし'}`;
+
+                        const downloadBtn = document.createElement('button');
+                        downloadBtn.className = 'btn';
+                        downloadBtn.textContent = 'CSVをダウンロード';
+                        downloadBtn.onclick = () => {
+                                downloadCSVInternal(logs, info, `session_${index + 1}`);
+                        };
+
+                        itemDiv.appendChild(titleDiv);
+                        itemDiv.appendChild(metaDiv);
+                        itemDiv.appendChild(downloadBtn);
+                        container.appendChild(itemDiv);
+                });
+        };
+
+        /**
+         * 入力されたJSON文字列を解析するメイン処理
+         * @param {string} rawText - JSONの生のテキスト
+         */
+        const parseAndProcessData = (rawText) => {
+                try {
+                        const parsedData = JSON.parse(rawText);
+                        
+                        // shikake_historyキーの存在確認と内部JSON文字列のパース
+                        if (!parsedData.shikake_history) {
+                                alert('エラー: ダンプデータ内に "shikake_history" キーが見つかりません。');
+                                return;
+                        }
+                        
+                        const history = JSON.parse(parsedData.shikake_history);
+                        renderSessions(history);
+                } catch (error) {
+                        alert('エラー: JSONのパースに失敗しました。データの形式を確認してください。');
+                        console.error(error);
+                }
+        };
+
+        // イベントリスナーの設定
+        document.getElementById('parseBtn').addEventListener('click', () => {
+                const text = document.getElementById('jsonTextArea').value.trim();
+                if (!text) {
+                        alert('テキストを入力してください。');
+                        return;
+                }
+                parseAndProcessData(text);
+        });
+
+        // ファイル入力のハンドリング
+        document.getElementById('fileInput').addEventListener('change', (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                document.getElementById('fileName').textContent = file.name;
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                        const content = e.target.result;
+                        document.getElementById('jsonTextArea').value = content;
+                        parseAndProcessData(content);
+                };
+                reader.readAsText(file);
+        });
+</script>
+</body>
+</html>
